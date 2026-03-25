@@ -11,12 +11,41 @@ import os
 # Add parent directory to path so we can import pipeline functions
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flask import Flask, render_template_string, request, Response, stream_with_context
+from flask import Flask, render_template_string, request, Response, stream_with_context, jsonify
 import json
 import queue
 import threading
 
 app = Flask(__name__)
+
+# ── Email Template Config ─────────────────────────────────────────────────────
+
+DEFAULT_TEMPLATE = {
+    'intro': 'I spend most of my day hunting for products with that "it factor." Products that make millions of Grommet shoppers stop scrolling and pull out their credit card.',
+    'social_proof': "My name is Greg, Head of Growth at Grommet. Since 2008 we've helped 4,500+ products get discovered by 2.5M shoppers, including 120+ Shark Tank brands.",
+    'value_prop': "Here's what makes us different: zero upfront cost. You only pay after we generate a sale that goes straight to your Shopify store. Top performers get upgraded to our larger partner network (Bime Beauty did $550K in 60 days).",
+    'cta': 'Can I send over a 2-minute Loom showing how it works?',
+    'example_hook': 'A patented auto-locking earring back that fits, locks, and lifts any post earring is the kind of product that makes someone stop and think about every earring they\'ve ever lost.\n\nThe fact that Chrysmela Catch works universally across any post earring and doubles as a lifter for drooping studs gives it real gifting range that goes way beyond a single use case. That\'s exactly what stops our shoppers mid-scroll.',
+    'subject_formula': 'Can we put [Product Name] in front of 2M+ Shoppers?',
+    'writing_rules': 'Hook MUST be exactly 2 paragraphs with a blank line between — never one block\nFirst hook paragraph: one sentence. The compelling observation about what the product does and why it matters to a shopper.\nSecond hook paragraph: ONE sentence only. End with something like "That\'s exactly what stops our shoppers mid-scroll."\nWrite the INSIGHT — not what the product does technically\nNo price, colors, dimensions, or product specs in the hook\nNEVER critique or advise the brand\nNEVER use em dashes (—)',
+}
+
+_TEMPLATE_FILE = '/tmp/template_config.json'
+_template_cache = None
+
+def get_template():
+    global _template_cache
+    if _template_cache is None:
+        if os.path.exists(_TEMPLATE_FILE):
+            try:
+                with open(_TEMPLATE_FILE) as f:
+                    saved = json.load(f)
+                _template_cache = {**DEFAULT_TEMPLATE, **saved}
+            except Exception:
+                _template_cache = dict(DEFAULT_TEMPLATE)
+        else:
+            _template_cache = dict(DEFAULT_TEMPLATE)
+    return _template_cache
 
 HTML = """
 <!DOCTYPE html>
@@ -326,6 +355,7 @@ HTML = """
 <header>
     <h1>Grommet Pipeline</h1>
     <span>Lead Qualification + Outreach</span>
+    <a href="/settings" style="margin-left:auto;color:#888;font-size:13px;text-decoration:none;padding:6px 12px;border:1px solid #333;border-radius:6px;">Email Template</a>
 </header>
 
 <div class="container">
@@ -585,6 +615,147 @@ def index():
     return render_template_string(HTML)
 
 
+@app.route('/settings')
+def settings():
+    tmpl = get_template()
+    page = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Template — Grommet Pipeline</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a1a; min-height: 100vh; }
+header { background: #1a1a1a; padding: 20px 40px; display: flex; align-items: center; gap: 16px; }
+header h1 { color: #fff; font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+header a { margin-left: auto; color: #888; font-size: 13px; text-decoration: none; }
+.container { max-width: 800px; margin: 48px auto; padding: 0 24px; }
+.card { background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 24px; }
+.card h2 { font-size: 15px; font-weight: 600; margin-bottom: 6px; color: #1a1a1a; }
+.card p.hint { font-size: 13px; color: #888; margin-bottom: 14px; }
+textarea { width: 100%; padding: 12px 14px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 14px; line-height: 1.6; color: #1a1a1a; font-family: inherit; resize: vertical; outline: none; transition: border-color 0.15s; }
+textarea:focus { border-color: #1a1a1a; }
+input[type="text"] { width: 100%; padding: 12px 14px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 14px; color: #1a1a1a; outline: none; font-family: inherit; transition: border-color 0.15s; }
+input[type="text"]:focus { border-color: #1a1a1a; }
+.actions { display: flex; gap: 12px; align-items: center; }
+button { background: #1a1a1a; color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
+button:hover { background: #333; }
+.reset-btn { background: transparent; color: #888; border: 1.5px solid #e0e0e0; }
+.reset-btn:hover { background: #f5f5f0; color: #1a1a1a; }
+#status { font-size: 13px; color: #666; }
+#status.ok { color: #2d8a4e; }
+#status.err { color: #c0392b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Email Template</h1>
+  <span>Grommet Pipeline</span>
+  <a href="/">Back to Pipeline</a>
+</header>
+<div class="container">
+
+<div class="card">
+  <h2>Opening Line</h2>
+  <p class="hint">The first sentence after the greeting. Sets up why you're reaching out.</p>
+  <textarea id="intro" rows="3">""" + tmpl['intro'] + """</textarea>
+</div>
+
+<div class="card">
+  <h2>Example Hook (Gold Standard)</h2>
+  <p class="hint">The Chrysmela example Claude uses as a benchmark. Update this when you find a better hook.</p>
+  <textarea id="example_hook" rows="6">""" + tmpl['example_hook'] + """</textarea>
+</div>
+
+<div class="card">
+  <h2>Social Proof Paragraph</h2>
+  <p class="hint">Comes after the personalized hook. Introduces Greg and Grommet's track record.</p>
+  <textarea id="social_proof" rows="3">""" + tmpl['social_proof'] + """</textarea>
+</div>
+
+<div class="card">
+  <h2>Value Proposition</h2>
+  <p class="hint">Zero upfront cost explanation + a success story reference.</p>
+  <textarea id="value_prop" rows="3">""" + tmpl['value_prop'] + """</textarea>
+</div>
+
+<div class="card">
+  <h2>Call to Action</h2>
+  <p class="hint">The closing ask.</p>
+  <textarea id="cta" rows="2">""" + tmpl['cta'] + """</textarea>
+</div>
+
+<div class="card">
+  <h2>Subject Line Formula</h2>
+  <p class="hint">Use [Product Name] as the placeholder — it gets replaced automatically.</p>
+  <input type="text" id="subject_formula" value=\"""" + tmpl['subject_formula'] + """\">
+</div>
+
+<div class="card">
+  <h2>Writing Rules</h2>
+  <p class="hint">One rule per line. These guide Claude's hook writing.</p>
+  <textarea id="writing_rules" rows="8">""" + tmpl['writing_rules'] + """</textarea>
+</div>
+
+<div class="card actions">
+  <button onclick="saveTemplate()">Save Template</button>
+  <button class="reset-btn" onclick="resetTemplate()">Reset to Defaults</button>
+  <span id="status"></span>
+</div>
+
+</div>
+<script>
+async function saveTemplate() {
+  const status = document.getElementById('status');
+  status.className = '';
+  status.textContent = 'Saving...';
+  const data = {
+    intro: document.getElementById('intro').value,
+    example_hook: document.getElementById('example_hook').value,
+    social_proof: document.getElementById('social_proof').value,
+    value_prop: document.getElementById('value_prop').value,
+    cta: document.getElementById('cta').value,
+    subject_formula: document.getElementById('subject_formula').value,
+    writing_rules: document.getElementById('writing_rules').value,
+  };
+  const res = await fetch('/settings/save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+  const j = await res.json();
+  if (j.ok) { status.className = 'ok'; status.textContent = 'Saved!'; setTimeout(()=>status.textContent='', 3000); }
+  else { status.className = 'err'; status.textContent = 'Error: ' + j.error; }
+}
+async function resetTemplate() {
+  if (!confirm('Reset all fields to defaults?')) return;
+  const res = await fetch('/settings/save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({_reset: true})});
+  const j = await res.json();
+  if (j.ok) location.reload();
+}
+</script>
+</body>
+</html>"""
+    return page
+
+
+@app.route('/settings/save', methods=['POST'])
+def settings_save():
+    global _template_cache
+    data = request.get_json()
+    if data.get('_reset'):
+        _template_cache = dict(DEFAULT_TEMPLATE)
+        try:
+            os.remove(_TEMPLATE_FILE)
+        except Exception:
+            pass
+        return jsonify({'ok': True})
+    _template_cache = {**DEFAULT_TEMPLATE, **{k: v for k, v in data.items() if k in DEFAULT_TEMPLATE}}
+    try:
+        with open(_TEMPLATE_FILE, 'w') as f:
+            json.dump(_template_cache, f)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+    return jsonify({'ok': True})
+
+
 @app.route('/run')
 def run():
     url = request.args.get('url', '').strip()
@@ -827,21 +998,22 @@ HTML: {html[:20000]}"""
             except Exception:
                 greeting = "Hey guys,"
 
+            tmpl = get_template()
             email_prompt = f"""Write a cold outreach email from Greg Rollett, Head of Growth at Grommet.
 
 EXACT STRUCTURE TO FOLLOW — DO NOT DEVIATE:
 ---
-Hey guys,
+{greeting}
 
-I spend most of my day hunting for products with that "it factor." Products that make millions of Grommet shoppers stop scrolling and pull out their credit card.
+{tmpl['intro']}
 
 [PERSONALIZED HOOK — 2 paragraphs with a blank line between them. Specific details from their site only.]
 
-My name is Greg, Head of Growth at Grommet. Since 2008 we've helped 4,500+ products get discovered by 2.5M shoppers, including 120+ Shark Tank brands.
+{tmpl['social_proof']}
 
-Here's what makes us different: zero upfront cost. You only pay after we generate a sale that goes straight to your Shopify store. Top performers get upgraded to our larger partner network (Bime Beauty did $550K in 60 days).
+{tmpl['value_prop']}
 
-Can I send over a 2-minute Loom showing how it works?
+{tmpl['cta']}
 
 Greg Rollett
 Head of Growth, Grommet
@@ -852,35 +1024,13 @@ BRAND: {fltr.get('brand_name')} | PRODUCT: {fltr.get('product_name')} | TAKE: {f
 HTML: {html[:40000]}
 
 EXAMPLE PERFECT HOOK (this is the gold standard — match this energy exactly):
-"A patented auto-locking earring back that fits, locks, and lifts any post earring is the kind of product that makes someone stop and think about every earring they've ever lost.
-
-The fact that Chrysmela Catch works universally across any post earring and doubles as a lifter for drooping studs gives it real gifting range that goes way beyond a single use case. That's exactly what stops our shoppers mid-scroll."
-
-Notice what makes this great:
-- It leads with the INSIGHT about why a shopper would stop — not the product specs
-- No price, no color options, no technical details the brand already knows
-- Second paragraph explains the commercial angle — why it has range
-- Ends by connecting back to Grommet shoppers
-
-WHAT TO AVOID (bad examples — never do this):
-- "priced at $55" — they know the price, leave it out
-- "comes in Yellow Gold, Platinum, Rose Gold" — they know the colors
-- Any product spec, SKU, dimension, or detail the brand already knows about their own product
+"{tmpl['example_hook']}"
 
 RULES:
 - Greeting: {greeting}
-- Sign off: Greg Rollett\nHead of Growth, Grommet
-- Hook MUST be exactly 2 paragraphs with a blank line between — never one block
-- First hook paragraph: one sentence. The compelling observation about what the product does and why it matters to a shopper.
-- Second hook paragraph: ONE sentence only. The angle or insight. End with something like "That's exactly what stops our shoppers mid-scroll." Do NOT add a third sentence explaining your reasoning.
-- Write the INSIGHT — not WHAT the product does technically, and not WHY Greg thinks it works commercially
-- The brand knows their product — write for a shopper discovering it for the first time
-- No price, colors, dimensions, or product specs in the hook
-- No meta-commentary ("this is why it works", "conversation starters drive impulse purchases") — state the insight and stop
-- NEVER critique or advise the brand
-- NEVER use em dashes (—)
-- No buzzwords or corporate speak
-- Subject formula: "Can we put [Product Name] in front of 2M+ Shoppers?"
+- Sign off: Greg Rollett\\nHead of Growth, Grommet
+- Subject formula: "{tmpl['subject_formula']}"
+{chr(10).join('- ' + r for r in tmpl['writing_rules'].splitlines() if r.strip())}
 
 Respond ONLY: {{"subject":"line","body":"full email","personalization_signals":["s1","s2","s3"]}}"""
 
@@ -1133,21 +1283,22 @@ HTML: {html[:20000]}"""
             except Exception:
                 greeting = "Hey guys,"
 
+            tmpl = get_template()
             email_prompt = f"""Write a cold outreach email from Greg Rollett, Head of Growth at Grommet.
 
 EXACT STRUCTURE TO FOLLOW — DO NOT DEVIATE:
 ---
-Hey guys,
+{greeting}
 
-I spend most of my day hunting for products with that "it factor." Products that make millions of Grommet shoppers stop scrolling and pull out their credit card.
+{tmpl['intro']}
 
-[PERSONALIZED HOOK — 2 paragraphs with a blank line between them.]
+[PERSONALIZED HOOK — 2 paragraphs with a blank line between them. Specific details from their site only.]
 
-My name is Greg, Head of Growth at Grommet. Since 2008 we've helped 4,500+ products get discovered by 2.5M shoppers, including 120+ Shark Tank brands.
+{tmpl['social_proof']}
 
-Here's what makes us different: zero upfront cost. You only pay after we generate a sale that goes straight to your Shopify store. Top performers get upgraded to our larger partner network (Bime Beauty did $550K in 60 days).
+{tmpl['value_prop']}
 
-Can I send over a 2-minute Loom showing how it works?
+{tmpl['cta']}
 
 Greg Rollett
 Head of Growth, Grommet
@@ -1156,20 +1307,14 @@ Head of Growth, Grommet
 BRAND: {fltr.get('brand_name')} | PRODUCT: {fltr.get('product_name')} | TAKE: {fltr.get('one_sentence_take')}
 HTML: {html[:40000]}
 
-EXAMPLE PERFECT HOOK:
-"A patented auto-locking earring back that fits, locks, and lifts any post earring is the kind of product that makes someone stop and think about every earring they've ever lost.
-
-The fact that Chrysmela Catch works universally across any post earring and doubles as a lifter for drooping studs gives it real gifting range that goes way beyond a single use case. That's exactly what stops our shoppers mid-scroll."
+EXAMPLE PERFECT HOOK (this is the gold standard — match this energy exactly):
+"{tmpl['example_hook']}"
 
 RULES:
 - Greeting: {greeting}
-- Sign off: Greg Rollett\nHead of Growth, Grommet
-- Hook MUST be 2 paragraphs with blank line between
-- Write the INSIGHT about why it's interesting — not specs the brand already knows
-- No price, colors, dimensions in the hook
-- NEVER critique or advise the brand
-- NEVER use em dashes
-- Subject formula: "Can we put [Product Name] in front of 2M+ Shoppers?"
+- Sign off: Greg Rollett\\nHead of Growth, Grommet
+- Subject formula: "{tmpl['subject_formula']}"
+{chr(10).join('- ' + r for r in tmpl['writing_rules'].splitlines() if r.strip())}
 
 Respond ONLY: {{"subject":"line","body":"full email","personalization_signals":["s1","s2","s3"]}}"""
 
