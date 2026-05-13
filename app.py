@@ -457,11 +457,35 @@ HTML = """
 
         <div class="action-buttons">
             <button onclick="openGmail()">Open Gmail Drafts</button>
+            <button class="btn-secondary" onclick="copyEmailModal()">Copy Email Text</button>
             <button class="btn-secondary" onclick="openSheet()">View Tracker Sheet</button>
             <button class="btn-secondary" onclick="resetUI()">Run Another</button>
         </div>
     </div>
 
+</div>
+
+<!-- Copy Email Modal -->
+<div id="copyModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;padding:28px;width:min(640px,92vw);max-height:85vh;display:flex;flex-direction:column;gap:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+            <h3 style="font-size:16px;font-weight:600;">Copy Email Text</h3>
+            <button onclick="closeCopyModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">×</button>
+        </div>
+        <div>
+            <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Subject</div>
+            <input id="copySubject" readonly style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:14px;background:#f9f9f9;" onclick="this.select()">
+        </div>
+        <div style="flex:1;overflow:hidden;display:flex;flex-direction:column;gap:4px;">
+            <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.5px;">Body</div>
+            <textarea id="copyBody" readonly style="flex:1;min-height:280px;width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:inherit;background:#f9f9f9;resize:vertical;" onclick="this.select()"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button onclick="copySubjectToClipboard()" style="flex:1;padding:9px;font-size:13px;">Copy Subject</button>
+            <button onclick="copyBodyToClipboard()" style="flex:1;padding:9px;font-size:13px;">Copy Body</button>
+            <button onclick="closeCopyModal()" style="flex:1;padding:9px;font-size:13px;background:#f5f5f0;color:#444;border:1px solid #ddd;">Close</button>
+        </div>
+    </div>
 </div>
 
 <footer>Grommet Pipeline &mdash; Local</footer>
@@ -534,6 +558,8 @@ function runPipeline() {
 }
 
 function showResult(data) {
+    _emailSubject = data.email_subject || '';
+    _emailBody = data.email_body || '';
     document.getElementById('resultCard').classList.add('visible');
     document.getElementById('resultBrand').textContent = data.brand_name;
     document.getElementById('metaProduct').textContent = data.product_name;
@@ -603,6 +629,40 @@ function resetUI() {
 
 document.getElementById('urlInput').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') runPipeline();
+});
+
+let _emailSubject = '';
+let _emailBody = '';
+
+function copyEmailModal() {
+    document.getElementById('copySubject').value = _emailSubject;
+    document.getElementById('copyBody').value = _emailBody;
+    const modal = document.getElementById('copyModal');
+    modal.style.display = 'flex';
+}
+
+function closeCopyModal() {
+    document.getElementById('copyModal').style.display = 'none';
+}
+
+function copySubjectToClipboard() {
+    navigator.clipboard.writeText(_emailSubject).then(() => {
+        const btn = event.target;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy Subject', 1500);
+    });
+}
+
+function copyBodyToClipboard() {
+    navigator.clipboard.writeText(_emailBody).then(() => {
+        const btn = event.target;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy Body', 1500);
+    });
+}
+
+document.getElementById('copyModal').addEventListener('click', function(e) {
+    if (e.target === this) closeCopyModal();
 });
 </script>
 
@@ -815,9 +875,37 @@ def run():
                 messages=[{'role': 'user', 'content': prompt}]
             )
             raw = response.content[0].text.strip()
-            raw = re.sub(r'```json', '', raw)
-            raw = re.sub(r'```', '', raw)
+            raw = re.sub(r'```json\s*', '', raw)
+            raw = re.sub(r'```\s*', '', raw)
             return pjson.loads(raw.strip())
+
+        def call_claude_email(prompt):
+            """Call Claude for email generation with robust JSON extraction fallback."""
+            client = ant.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=2000,
+                messages=[{'role': 'user', 'content': prompt}]
+            )
+            raw = response.content[0].text.strip()
+            raw = re.sub(r'```json\s*', '', raw)
+            raw = re.sub(r'```\s*', '', raw)
+            raw = raw.strip()
+            try:
+                return pjson.loads(raw)
+            except Exception:
+                # Fallback: regex-extract subject and body from malformed JSON
+                subj_match = re.search(r'"subject"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+                body_match = re.search(r'"body"\s*:\s*"((?:[^"\\]|\\.)*(?:\\.[^"\\]*)*)"', raw, re.DOTALL)
+                subject = subj_match.group(1) if subj_match else 'Follow-up from Grommet'
+                if body_match:
+                    body = body_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+                else:
+                    # Last resort: use raw text as body (strip the JSON scaffolding as best we can)
+                    body = re.sub(r'^\{.*?"body"\s*:\s*"', '', raw, flags=re.DOTALL)
+                    body = re.sub(r'",?\s*"personalization_signals".*$', '', body, flags=re.DOTALL).strip()
+                    body = body.replace('\\n', '\n').replace('\\"', '"')
+                return {'subject': subject, 'body': body, 'personalization_signals': []}
 
         def fetch_page(u):
             try:
@@ -1034,25 +1122,32 @@ RULES:
 
 Respond ONLY: {{"subject":"line","body":"full email","personalization_signals":["s1","s2","s3"]}}"""
 
-            email_result = call_claude(email_prompt, 1000)
+            email_result = call_claude_email(email_prompt)
             emit({'type':'stage','id':'draft','state':'done',
                   'detail':f"Subject: {email_result.get('subject')}"})
 
             # Stage 6: Save Gmail draft
             emit({'type':'stage','id':'gmail','state':'running','detail':'Saving to Gmail drafts...'})
-            creds = get_creds()
-            service = build('gmail', 'v1', credentials=creds)
-            msg = MIMEText(email_result['body'])
-            msg['subject'] = email_result['subject']
-            msg['to'] = recipient_email
-            raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-            draft = service.users().drafts().create(userId='me', body={'message':{'raw':raw_msg}}).execute()
-            emit({'type':'stage','id':'gmail','state':'done','detail':f"Draft saved (ID: {draft['id']})"})
+            try:
+                creds = get_creds()
+                service = build('gmail', 'v1', credentials=creds)
+                msg = MIMEText(email_result['body'])
+                msg['subject'] = email_result['subject']
+                msg['to'] = recipient_email
+                raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+                draft = service.users().drafts().create(userId='me', body={'message':{'raw':raw_msg}}).execute()
+                emit({'type':'stage','id':'gmail','state':'done','detail':f"Draft saved (ID: {draft['id']})"})
+            except Exception as gmail_err:
+                emit({'type':'stage','id':'gmail','state':'failed',
+                      'detail':f'Gmail error: {gmail_err} — copy email from results below'})
+                creds = None
 
             # Stage 7: Log to sheet
             emit({'type':'stage','id':'sheet','state':'running','detail':'Logging to tracker...'})
             sheet_url = ''
             try:
+                if creds is None:
+                    creds = get_creds()
                 gc = gspread.authorize(creds)
                 try:
                     spreadsheet = gc.open(SHEET_NAME)
@@ -1188,9 +1283,35 @@ def override():
                 messages=[{'role': 'user', 'content': prompt}]
             )
             raw = response.content[0].text.strip()
-            raw = re.sub(r'```json', '', raw)
-            raw = re.sub(r'```', '', raw)
+            raw = re.sub(r'```json\s*', '', raw)
+            raw = re.sub(r'```\s*', '', raw)
             return pjson.loads(raw.strip())
+
+        def call_claude_email(prompt):
+            """Call Claude for email generation with robust JSON extraction fallback."""
+            client = ant.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=2000,
+                messages=[{'role': 'user', 'content': prompt}]
+            )
+            raw = response.content[0].text.strip()
+            raw = re.sub(r'```json\s*', '', raw)
+            raw = re.sub(r'```\s*', '', raw)
+            raw = raw.strip()
+            try:
+                return pjson.loads(raw)
+            except Exception:
+                subj_match = re.search(r'"subject"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+                body_match = re.search(r'"body"\s*:\s*"((?:[^"\\]|\\.)*(?:\\.[^"\\]*)*)"', raw, re.DOTALL)
+                subject = subj_match.group(1) if subj_match else 'Follow-up from Grommet'
+                if body_match:
+                    body = body_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+                else:
+                    body = re.sub(r'^\{.*?"body"\s*:\s*"', '', raw, flags=re.DOTALL)
+                    body = re.sub(r'",?\s*"personalization_signals".*$', '', body, flags=re.DOTALL).strip()
+                    body = body.replace('\\n', '\n').replace('\\"', '"')
+                return {'subject': subject, 'body': body, 'personalization_signals': []}
 
         def fetch_page(u):
             try:
@@ -1318,25 +1439,32 @@ RULES:
 
 Respond ONLY: {{"subject":"line","body":"full email","personalization_signals":["s1","s2","s3"]}}"""
 
-            email_result = call_claude(email_prompt, 1000)
+            email_result = call_claude_email(email_prompt)
             emit({'type':'stage','id':'draft','state':'done',
                   'detail':f"Subject: {email_result.get('subject')}"})
 
             # Save Gmail draft
             emit({'type':'stage','id':'gmail','state':'running','detail':'Saving to Gmail drafts...'})
-            creds = get_creds()
-            service = build('gmail', 'v1', credentials=creds)
-            msg = MIMEText(email_result['body'])
-            msg['subject'] = email_result['subject']
-            msg['to'] = recipient_email
-            raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-            draft = service.users().drafts().create(userId='me', body={'message':{'raw':raw_msg}}).execute()
-            emit({'type':'stage','id':'gmail','state':'done','detail':f"Draft saved (ID: {draft['id']})"})
+            try:
+                creds = get_creds()
+                service = build('gmail', 'v1', credentials=creds)
+                msg = MIMEText(email_result['body'])
+                msg['subject'] = email_result['subject']
+                msg['to'] = recipient_email
+                raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+                draft = service.users().drafts().create(userId='me', body={'message':{'raw':raw_msg}}).execute()
+                emit({'type':'stage','id':'gmail','state':'done','detail':f"Draft saved (ID: {draft['id']})"})
+            except Exception as gmail_err:
+                emit({'type':'stage','id':'gmail','state':'failed',
+                      'detail':f'Gmail error: {gmail_err} — copy email from results below'})
+                creds = None
 
             # Log to sheet with override status
             emit({'type':'stage','id':'sheet','state':'running','detail':'Logging to tracker...'})
             sheet_url = ''
             try:
+                if creds is None:
+                    creds = get_creds()
                 gc = gspread.authorize(creds)
                 try:
                     spreadsheet = gc.open(SHEET_NAME)
