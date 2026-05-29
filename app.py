@@ -925,11 +925,14 @@ def run():
                 if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
                 else:
-                    flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-                    creds = flow.run_local_server(port=0)
+                    raise RuntimeError("Google auth unavailable — GOOGLE_TOKEN_JSON is missing or its refresh token was revoked. Run reauth.py locally and update the Railway variable.")
                 with open(TOKEN_FILE, 'w') as t:
                     t.write(creds.to_json())
             return creds
+
+        if not os.environ.get('ANTHROPIC_API_KEY'):
+            emit({'type':'error','message':'ANTHROPIC_API_KEY env var not set on the server.'})
+            return
 
         try:
             # Stage 1: Fetch
@@ -942,7 +945,7 @@ def run():
             shopify_prompt = f"""Analyze this HTML and determine if the site is built on Shopify.
 Look for: cdn.shopify.com, myshopify.com, window.Shopify, shopify-features, meta shopify-checkout-api-token.
 URL: {url}
-HTML: {html}
+HTML: {html[:15000]}
 Respond with ONLY this JSON: {{"is_shopify": true, "confidence": "HIGH", "signals_found": ["s1","s2"], "platform_detected": "Shopify"}}"""
             shopify = call_claude(shopify_prompt, 500)
             if not shopify.get('is_shopify'):
@@ -1197,7 +1200,7 @@ Respond ONLY: {{"subject":"line","body":"full email","personalization_signals":[
     def generate():
         while True:
             try:
-                item = q.get(timeout=120)
+                item = q.get(timeout=280)
                 yield f"data: {json.dumps(item)}\n\n"
                 if item.get('type') in ('complete', 'disqualified', 'error'):
                     break
@@ -1331,11 +1334,14 @@ def override():
                 if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
                 else:
-                    flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-                    creds = flow.run_local_server(port=0)
+                    raise RuntimeError("Google auth unavailable — GOOGLE_TOKEN_JSON is missing or its refresh token was revoked. Run reauth.py locally and update the Railway variable.")
                 with open(TOKEN_FILE, 'w') as t:
                     t.write(creds.to_json())
             return creds
+
+        if not os.environ.get('ANTHROPIC_API_KEY'):
+            emit({'type':'error','message':'ANTHROPIC_API_KEY env var not set on the server.'})
+            return
 
         try:
             # Re-fetch the page for email drafting
@@ -1514,7 +1520,7 @@ Respond ONLY: {{"subject":"line","body":"full email","personalization_signals":[
     def generate():
         while True:
             try:
-                item = q.get(timeout=120)
+                item = q.get(timeout=280)
                 yield f"data: {json.dumps(item)}\n\n"
                 if item.get('type') in ('complete', 'error'):
                     break
