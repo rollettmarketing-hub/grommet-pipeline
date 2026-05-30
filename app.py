@@ -907,15 +907,61 @@ def run():
                     body = body.replace('\\n', '\n').replace('\\"', '"')
                 return {'subject': subject, 'body': body, 'personalization_signals': []}
 
+        # Markers we scan for in the FULL raw HTML before stripping.
+        # Many signals live inside <script> tags (widget config) or in the
+        # footer past the 80K truncation point, so we extract them up front
+        # and prepend them as a summary that always survives.
+        SIGNAL_MARKERS = {
+            'okendo': 'Okendo review widget',
+            'yotpo': 'Yotpo review widget',
+            'judge.me': 'Judge.me review widget',
+            'stamped.io': 'Stamped review widget',
+            'loox.io': 'Loox photo reviews',
+            'reviews.io': 'Reviews.io widget',
+            'shopify-product-reviews': 'Shopify Product Reviews widget',
+            'klaviyo': 'Klaviyo email capture',
+            'kickstarter.com': 'Kickstarter campaign linked',
+            'indiegogo.com': 'Indiegogo campaign linked',
+            'patent pending': 'Patent Pending status',
+            'patented': 'Patented status',
+            'as seen on': 'As seen on (press)',
+            'featured in': 'Featured in (press)',
+            'shark tank': 'Shark Tank reference',
+            'forbes.com': 'Forbes mention',
+            'techcrunch.com': 'TechCrunch mention',
+        }
+
+        def extract_signals(raw):
+            lower = raw.lower()
+            return [label for k, label in SIGNAL_MARKERS.items() if k in lower]
+
+        def clean_html(raw):
+            # 1. Extract signals from the FULL page before stripping so widget
+            #    references (which live inside <script> config blocks) survive.
+            signals = extract_signals(raw)
+            # 2. Strip noise that wastes tokens but carries no brand signal.
+            raw = re.sub(r'<script\b[^>]*>.*?</script>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<style\b[^>]*>.*?</style>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<svg\b[^>]*>.*?</svg>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<noscript\b[^>]*>.*?</noscript>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<!--.*?-->', ' ', raw, flags=re.DOTALL)
+            raw = re.sub(r'\s+', ' ', raw)
+            # 3. Prepend a signals header so it survives truncation.
+            if signals:
+                header = '[DETECTED PAGE SIGNALS: ' + '; '.join(signals) + ']\n\n'
+                return header + raw
+            return raw
+
         def fetch_page(u):
             try:
                 import httpx
                 r = httpx.get(u, headers={'User-Agent':'Mozilla/5.0'}, follow_redirects=True, timeout=15)
-                return r.text[:80000]
+                raw = r.text
             except Exception:
                 req = urllib.request.Request(u, headers={'User-Agent':'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=15) as r:
-                    return r.read().decode('utf-8', errors='ignore')[:80000]
+                    raw = r.read().decode('utf-8', errors='ignore')
+            return clean_html(raw)[:80000]
 
         def get_creds():
             creds = None
@@ -964,7 +1010,7 @@ HTML: {html}
 LANE A gates (2+ failures = DISQUALIFIED, Q1A+Q6 both fail = auto DISQUALIFIED):
 Q1A: Clear problem/outcome stated?
 Q2: 15-second visual demo possible?
-Q5: Evidence it's real (checkout, reviews, backers)?
+Q5: Evidence it's real? PASS if ANY one is present: live checkout/add-to-cart button, a review widget (Okendo, Yotpo, Judge.me, Stamped, shopify-product-reviews — count widget presence even if reviews are lazy-loaded and you can't see the text), real customer reviews with names, Kickstarter/Indiegogo backers, Patent Pending or Patented status, or verified retailer presence. Note: most modern Shopify brands lazy-load reviews via JS widgets — the widget container is sufficient evidence.
 Q6: Editorial credibility, real brand identity? FAIL if dropship/commodity.
 Q7: Non-interchangeable? Patent, distinct design, origin story?
 LANE B (tier shaping only):
@@ -1316,15 +1362,61 @@ def override():
                     body = body.replace('\\n', '\n').replace('\\"', '"')
                 return {'subject': subject, 'body': body, 'personalization_signals': []}
 
+        # Markers we scan for in the FULL raw HTML before stripping.
+        # Many signals live inside <script> tags (widget config) or in the
+        # footer past the 80K truncation point, so we extract them up front
+        # and prepend them as a summary that always survives.
+        SIGNAL_MARKERS = {
+            'okendo': 'Okendo review widget',
+            'yotpo': 'Yotpo review widget',
+            'judge.me': 'Judge.me review widget',
+            'stamped.io': 'Stamped review widget',
+            'loox.io': 'Loox photo reviews',
+            'reviews.io': 'Reviews.io widget',
+            'shopify-product-reviews': 'Shopify Product Reviews widget',
+            'klaviyo': 'Klaviyo email capture',
+            'kickstarter.com': 'Kickstarter campaign linked',
+            'indiegogo.com': 'Indiegogo campaign linked',
+            'patent pending': 'Patent Pending status',
+            'patented': 'Patented status',
+            'as seen on': 'As seen on (press)',
+            'featured in': 'Featured in (press)',
+            'shark tank': 'Shark Tank reference',
+            'forbes.com': 'Forbes mention',
+            'techcrunch.com': 'TechCrunch mention',
+        }
+
+        def extract_signals(raw):
+            lower = raw.lower()
+            return [label for k, label in SIGNAL_MARKERS.items() if k in lower]
+
+        def clean_html(raw):
+            # 1. Extract signals from the FULL page before stripping so widget
+            #    references (which live inside <script> config blocks) survive.
+            signals = extract_signals(raw)
+            # 2. Strip noise that wastes tokens but carries no brand signal.
+            raw = re.sub(r'<script\b[^>]*>.*?</script>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<style\b[^>]*>.*?</style>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<svg\b[^>]*>.*?</svg>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<noscript\b[^>]*>.*?</noscript>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+            raw = re.sub(r'<!--.*?-->', ' ', raw, flags=re.DOTALL)
+            raw = re.sub(r'\s+', ' ', raw)
+            # 3. Prepend a signals header so it survives truncation.
+            if signals:
+                header = '[DETECTED PAGE SIGNALS: ' + '; '.join(signals) + ']\n\n'
+                return header + raw
+            return raw
+
         def fetch_page(u):
             try:
                 import httpx
                 r = httpx.get(u, headers={'User-Agent':'Mozilla/5.0'}, follow_redirects=True, timeout=15)
-                return r.text[:80000]
+                raw = r.text
             except Exception:
                 req = urllib.request.Request(u, headers={'User-Agent':'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=15) as r:
-                    return r.read().decode('utf-8', errors='ignore')[:80000]
+                    raw = r.read().decode('utf-8', errors='ignore')
+            return clean_html(raw)[:80000]
 
         def get_creds():
             creds = None
